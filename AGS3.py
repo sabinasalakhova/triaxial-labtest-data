@@ -128,9 +128,9 @@ def AGS3_to_dict(filepath_or_buffer, encoding='utf-8'):
 
     return data, headings
 
-
-def AGS3_to_dataframe(filepath_or_buffer, encoding='utf-8'):
-    """Load all the tables in a AGS3 file to a Pandas dataframes. The output is
+def AGS3_to_dataframe(filepath_or_buffer, encoding='utf-8', collect_faulty_lines=False):
+    """
+    Load all the tables in a AGS3 file to Pandas dataframes. The output is
     a Python dictionary of dataframes with the name of each AGS3 table (i.e.
     GROUP) as the primary key.
 
@@ -138,40 +138,46 @@ def AGS3_to_dataframe(filepath_or_buffer, encoding='utf-8'):
     ----------
     filepath_or_buffer : str, StringIO
         Path to AGS3 file or any file like object (open file or StringIO)
+    encoding : str
+        Encoding to use for reading the file (default 'utf-8')
+    collect_faulty_lines : bool
+        If True, returns a list of faulty tables (group name and error message)
 
     Returns
     -------
-    data : dict
-        Python dictionary populated with Pandas dataframes. Each GROUP in the AGS3 files is assigned to its a dataframe.
+    df : dict
+        Python dictionary populated with Pandas dataframes. Each GROUP in the AGS3 files is assigned to its own dataframe.
     headings : dict
-        Dictionary with the headings in the each GROUP (This will be needed to
-        recall the correct column order when writing pandas dataframes back to AGS3
-        files. i.e. input for 'dataframe_to_AGS3()' function)
+        Dictionary with the headings in each GROUP
+    faulty_tables : list of tuples (group_name, error_message)
+        Only returned if collect_faulty_lines=True
     """
-
     from pandas import DataFrame
 
     # Extract AGS3 file into a dictionary of dictionaries
     data, headings = AGS3_to_dict(filepath_or_buffer, encoding=encoding)
     
-    # Convert dictionary of dictionaries to a dictionary of Pandas dataframes
     df = {}
+    faulty_tables = []
+
     for key in data:
         try:
             table = DataFrame(data[key])
             if len(table) == 0: 
                 continue
-            #table[1:] = table[1:].apply(pd.to_numeric, errors='ignore')
             df[key] = table
-        except ValueError:
-            splitted = filepath_or_buffer.rsplit("/",2)
-            splitted = str(splitted[1:2])
-            print(splitted + ": ")
-            print ('check file: {} is not exported'.format(key))
-            
+        except Exception as e:
+            if collect_faulty_lines:
+                faulty_tables.append((key, str(e)))
             continue
-    return df, headings
 
+    if collect_faulty_lines:
+        return df, headings, faulty_tables
+    else:
+        return df, headings
+
+
+   
 
 def is_file_like(obj):
     """Check if object is file like
@@ -189,3 +195,7 @@ def is_file_like(obj):
         return False
 
     return True
+
+
+
+
