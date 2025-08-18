@@ -181,70 +181,58 @@ def AGS4_to_dict(filepath_or_buffer, encoding='utf-8', get_line_numbers=False, r
     return data, headings
 
 
-def AGS4_to_dataframe(filepath_or_buffer, encoding='utf-8', get_line_numbers=False, rename_duplicate_headers=True):
-    """Load all the tables in an AGS4 file to a dictionary of Pandas dataframes.
-
-    The output is a dictionary of dataframes with the name of each AGS4 table
-    (i.e. GROUP) as the primary key.
+def AGS4_to_dataframe(filepath_or_buffer, encoding='utf-8', get_line_numbers=False, rename_duplicate_headers=True, collect_faulty_lines=False):
+    """
+    Load all the tables in an AGS4 file to Pandas dataframes. The output is
+    a Python dictionary of dataframes with the name of each AGS4 table (i.e. GROUP) as the primary key.
 
     Parameters
     ----------
     filepath_or_buffer : str, StringIO
-        Path to AGS4 file or any file like object (open file or StringIO).
-    encoding : str, default='utf-8'
-        Encoding of text file. This can be set to 'utf-8-sig' to read files that
-        begin with a byte-order-mark.
-    get_line_numbers : bool, default=False
-        Add line number column to each table (for UNIT, TYPE, and DATA rows) and
-        return a dictionary with line numbers for GROUP and HEADING lines.
-    rename_duplicate_headers: bool, default=True
-        Rename duplicate headers if found. Neither AGS4 tables nor Pandas
-        dataframes allow duplicate headers, therefore a number will be appended
-        to duplicates to make them unique.
+        Path to AGS4 file or any file like object (open file or StringIO)
+    encoding : str
+        Encoding to use for reading the file (default 'utf-8')
+    get_line_numbers : bool
+        If True, returns line numbers for each group/table
+    rename_duplicate_headers : bool
+        If True, renames duplicate headers to make them unique
+    collect_faulty_lines : bool
+        If True, returns a list of faulty tables (group name, error message, line number if available)
 
     Returns
     -------
-    tables : dict of dataframes
-        Dictionary populated with Pandas dataframes. Each GROUP in the AGS4
-        files is assigned to its a dataframe.
-    headings : dict of lists
-        Dictionary with the headings in the each GROUP (This will be needed to
-        recall the correct column order when writing Pandas dataframes back to
-        AGS4 files. i.e. input for 'dataframe_to_AGS4()' function)
-    line_numbers : dict of int, only if get_line_numbers=True
-        Dictionary with the starting line numbers of GROUP and HEADING rows.
-        This is only required for checking a .ags file with 'check_file()'
-        function.
-
+    df : dict
+        Python dictionary populated with Pandas dataframes. Each GROUP in the AGS4 files is assigned to its own dataframe.
+    headings : dict
+        Dictionary with the headings in each GROUP
+    faulty_tables : list of tuples (group_name, error_message, line_number)
+        Only returned if collect_faulty_lines=True
     """
+    import pandas as pd
 
-    from pandas import DataFrame
+    # You may have a function AGS4_to_dict similar to AGS3_to_dict
+    # If not, replace this with your actual AGS4 parsing logic
+    data, headings, group_line_numbers = AGS4_to_dict(filepath_or_buffer, encoding=encoding, get_line_numbers=get_line_numbers, rename_duplicate_headers=rename_duplicate_headers)
 
-    # Extract AGS4 file into a dictionary of dictionaries. A dictionary with
-    # group line numbers is returned, in addition to data and headings, for
-    # checking purposes.
-    if get_line_numbers is True:
-        data, headings, line_numbers = AGS4_to_dict(filepath_or_buffer, encoding=encoding, get_line_numbers=get_line_numbers,
-                                                    rename_duplicate_headers=rename_duplicate_headers)
+    df = {}
+    faulty_tables = []
 
-        # Convert dictionary of dictionaries to a dictionary of Pandas
-        # dataframes
-        tables = {}
-        for key in data:
-            tables[key] = DataFrame(data[key])
-
-        return tables, headings, line_numbers
-
-    # Otherwise only the data and the headings are returned
-    data, headings = AGS4_to_dict(filepath_or_buffer, encoding=encoding,
-                                  rename_duplicate_headers=rename_duplicate_headers)
-
-    # Convert dictionary of dictionaries to a dictionary of Pandas dataframes
-    tables = {}
     for key in data:
-        tables[key] = DataFrame(data[key])
+        try:
+            table = pd.DataFrame(data[key])
+            if len(table) == 0:
+                continue
+            df[key] = table
+        except Exception as e:
+            line_number = group_line_numbers.get(key) if get_line_numbers and group_line_numbers else None
+            if collect_faulty_lines:
+                faulty_tables.append((key, str(e), line_number))
+            continue
 
-    return tables, headings
+    if collect_faulty_lines:
+        return df, headings, faulty_tables
+    else:
+        return df, headings
 
 
 def AGS4_to_excel(input_file, output_file, encoding='utf-8', rename_duplicate_headers=True, sorting_strategy=None):
