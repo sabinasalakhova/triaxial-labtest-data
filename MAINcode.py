@@ -540,7 +540,7 @@ if uploaded_files:
  
    # --- Triaxial summary & plots
     st.markdown("---")
-    st.header("🔬 Triaxial Summary & s–t Plots")
+    st.header(" Triaxial Summary & s–t Plots")
     tri_df = generate_triaxial_table(combined_groups)
     
     if tri_df.empty:
