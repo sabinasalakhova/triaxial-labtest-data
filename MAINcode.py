@@ -10,7 +10,7 @@ import plotly.express as px
 import streamlit as st
 
 # --------------------------------------------------------------------------------------
-# Page config & title
+# Page title
 # --------------------------------------------------------------------------------------
 st.set_page_config(page_title="Triaxial Lab Test AGS Processor", layout="wide")
 st.title("Triaxial Lab Test AGS File Processor (.ags ➜ Tables + Excel + s–t Graphs)")
@@ -23,13 +23,10 @@ uploaded_files = st.file_uploader(
 )
 
 # --------------------------------------------------------------------------------------
-# Helpers: AGS detection & parsing (handles AGS3 and AGS4)
+# Helpers funcs
 # --------------------------------------------------------------------------------------
 def analyze_ags_content(file_bytes: bytes) -> Dict[str, str]:
-    """
-    Light fingerprinting of AGS3 vs AGS4 and presence of key groups.
-    Non-fatal: returns flags only.
-    """
+    
     results = {"AGS3": "No", "AGS4": "No", 'Contains "LOCA"': "No", "Contains **HOLE": "No"}
     try:
         content = file_bytes.decode("latin-1", errors="ignore")
@@ -52,10 +49,6 @@ def analyze_ags_content(file_bytes: bytes) -> Dict[str, str]:
 
 
 def _split_quoted_csv(line: str) -> List[str]:
-    """
-    Robust split for AGS-style quoted CSV (handles quotes and commas).
-    """
-    # Trim whitespace
     s = line.strip()
     # Normalize quotes
     if s.startswith('"') and s.endswith('"') and '","' in s:
@@ -68,13 +61,6 @@ def _split_quoted_csv(line: str) -> List[str]:
 
 
 def parse_ags_file(file_bytes: bytes) -> Dict[str, pd.DataFrame]:
-    """
-    Unified parser that supports:
-    - AGS4: lines starting with GROUP, HEADING, UNIT, TYPE and DATA or direct data rows
-    - AGS3: lines starting with **GROUP, *HEADING and data rows
-    - <CONT> continuation rows for both (may appear as "<CONT>" or &lt;CONT&gt;)
-    Returns a dict: {group_name: DataFrame}
-    """
     text = file_bytes.decode("latin-1", errors="ignore")
     lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
 
@@ -148,7 +134,7 @@ def parse_ags_file(file_bytes: bytes) -> Dict[str, pd.DataFrame]:
                                 group_data[current_group][-1][field] = (prev + " | " if prev else "") + val
             continue
 
-        # DATA row fallback (both styles) when descriptors are absent
+        # if no descriptors
         if current_group and headings:
             if len(parts) >= len(headings):
                 row = dict(zip(headings, parts[:len(headings)]))
@@ -253,7 +239,7 @@ def to_numeric_safe(df: pd.DataFrame, cols: List[str]):
     for c in cols:
         if c in df.columns:
             df[c] = pd.to_numeric(df[c], errors="coerce")
-
+##problems here, correct the divide func
 
 def generate_triaxial_table(groups: Dict[str, pd.DataFrame]) -> pd.DataFrame:
     """
@@ -283,7 +269,10 @@ def generate_triaxial_table(groups: Dict[str, pd.DataFrame]) -> pd.DataFrame:
         # Ensure HOLE_ID is string
         if "HOLE_ID" in df.columns:
             df["HOLE_ID"] = df["HOLE_ID"].astype(str)
-
+            
+    # Before merge
+     value_cols = ["CELL", "DEVF", "PWPF"]
+     merged = merged.drop(columns=value_cols, errors="ignore")
 
     # Merge keys
     merge_keys = ["HOLE_ID"]
@@ -351,35 +340,37 @@ def generate_triaxial_table(groups: Dict[str, pd.DataFrame]) -> pd.DataFrame:
 
 
 def compute_s_t(tri_df: pd.DataFrame, mode: str = "Effective") -> pd.DataFrame:
-    """
-    Compute (s, t) for each triaxial test row.
-    - t = q/2 = DEVF/2
-    - s_total = σ3 + q/2 = CELL + DEVF/2
-    - s_eff = σ3' + q/2 = (CELL - PWPF) + DEVF/2
-    If PWPF is missing in Effective mode, s_eff falls back to NaN; we still compute t.
-    """
+   
     df = tri_df.copy()
     # Coalesce a single 'TEST_TYPE' helper
-    if "TEST_TYPE" not in df.columns:
-        if "TREG_TYPE" in df.columns and "TRIG_TYPE" in df.columns:
-            df["TEST_TYPE"] = df["TREG_TYPE"].fillna(df["TRIG_TYPE"])
-        elif "TREG_TYPE" in df.columns:
-            df["TEST_TYPE"] = df["TREG_TYPE"]
-        elif "TRIG_TYPE" in df.columns:
-            df["TEST_TYPE"] = df["TRIG_TYPE"]
-        else:
-            df["TEST_TYPE"] = np.nan
+    
+    test_type_cols = []
+    if "TREG_TYPE" in df.columns: test_type_cols.append("TREG_TYPE")
+    if "TRIG_TYPE" in df.columns: test_type_cols.append("TRIG_TYPE")
+        
+    if test_type_cols:
+        df["TEST_TYPE"] = df[test_type_cols].apply(
+            lambda x: ' | '.join(x.dropna().astype(str).unique()), 
+            axis=1
+        )
+    else:
+        df["TEST_TYPE"] = "Unknown"    
 
     to_numeric_safe(df, ["CELL", "DEVF", "PWPF"])
     df["t"] = df["DEVF"] / 2.0
     df["s_total"] = df["CELL"] + df["t"]
-    df["s_effective"] = (df["CELL"] - df["PWPF"]) + df["t"] if "PWPF" in df.columns else np.nan
+    df["s_effective"] = (df["CELL"] - df["PWPF"]) + (df["DEVF"] / 2) if "PWPF" in df.columns else np.nan
 
     if mode.lower().startswith("eff"):
         df["s"] = df["s_effective"]
     else:
         df["s"] = df["s_total"]
-
+  
+    if mode.lower().startswith("eff") and "PWPF" in df.columns:
+        missing_pwp = df["PWPF"].isna().sum()
+        if missing_pwp > 0:
+            st.warning(f"Warning: {missing_pwp} test(s) missing pore pressure data - effective stress calculations may be incomplete")
+            
     # Keep key columns for plotting
     keep = ["HOLE_ID", "SPEC_DEPTH", "TEST_TYPE", "CELL", "PWPF", "DEVF", "s_total", "s_effective", "s", "t", "SOURCE_FILE"]
     keep = [c for c in keep if c in df.columns]
@@ -409,6 +400,7 @@ def add_st_charts_to_excel(writer: pd.ExcelWriter, st_df: pd.DataFrame, sheet_na
       - s–t (total)    : x = s_total,     y = t
     Places them on a new sheet 'Charts'.
     """
+    chart.set_position({'x_offset': 25, 'y_offset': 10})  # Dynamic positioning
     if st_df is None or st_df.empty:
         return
 
